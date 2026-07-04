@@ -1,21 +1,28 @@
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
+from flask import Flask, request, jsonify
 import google.generativeai as genai
+import requests as req
 from eligibility import check_eligibility, format_schemes_message
 from sessions import get_session, update_session, reset_session
-
-app = Flask(__name__)
-
-# CONFIGURE GEMINI AI HERE
 import os
 from dotenv import load_dotenv
 
+app = Flask(__name__)
+
 load_dotenv()
 
+# ── Gemini AI ──────────────────────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
+# ── Meta WhatsApp Cloud API credentials ───────────────────────────────────────
+WHATSAPP_TOKEN  = os.getenv("WHATSAPP_TOKEN")    # Permanent / System User token
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")  # From Meta Developer Dashboard
+VERIFY_TOKEN    = os.getenv("VERIFY_TOKEN")      # Any secret string you choose
+
+GRAPH_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+
+# ── Conversation questions ─────────────────────────────────────────────────────
 QUESTIONS = {
     'english': [
         "Welcome to Benefit Bridge AI!\n\nChoose language:\n1- English\n2- Tamil\n3- Hindi",
@@ -45,7 +52,26 @@ QUESTIONS = {
     ]
 }
 
-def process_answer(session, question_number, answer):
+
+# ── Helper: send a message via Meta Cloud API ──────────────────────────────────
+def send_message(to: str, text: str) -> dict:
+    """POST a text message to a WhatsApp number through Meta's Graph API."""
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": text}
+    }
+    response = req.post(GRAPH_API_URL, headers=headers, json=payload)
+    return response.json()
+
+
+# ── Helper: parse user answer and update session profile ──────────────────────
+def process_answer(session: dict, question_number: int, answer: str) -> bool:
     profile = session.get('profile', {})
     answer = answer.strip().lower()
 
@@ -60,7 +86,7 @@ def process_answer(session, question_number, answer):
     elif question_number == 2:
         try:
             profile['age'] = int(answer)
-        except:
+        except ValueError:
             return False
 
     elif question_number == 3:
@@ -73,9 +99,8 @@ def process_answer(session, question_number, answer):
 
     elif question_number == 4:
         try:
-            clean_answer = answer.replace(',', '')
-            profile['income'] = int(clean_answer)
-        except:
+            profile['income'] = int(answer.replace(',', ''))
+        except ValueError:
             return False
 
     elif question_number == 5:
@@ -98,7 +123,7 @@ def process_answer(session, question_number, answer):
     elif question_number == 10:
         profile['has_girl_child'] = answer in ['1', 'yes', 'y']
         if profile['has_girl_child']:
-            profile['girl_child_age'] = 5
+            profile['girl_child_age'] = 5  # conservative default
 
     elif question_number == 11:
         profile['is_working'] = answer in ['1', 'yes', 'y']
@@ -107,72 +132,119 @@ def process_answer(session, question_number, answer):
     return True
 
 
+# ── Route 1: Webhook verification (Meta handshake) ────────────────────────────
+@app.route('/webhook', methods=['GET'])
+def verify_webhook():
+    """
+    Meta calls this once when you register the webhook URL.
+    It passes hub.verify_token — must match your VERIFY_TOKEN env var.
+    Return hub.challenge to confirm ownership.
+    """
+    mode      = request.args.get('hub.mode')
+    token     = request.args.get('hub.verify_token')
+    challenge = request.args.get('hub.challenge')
+
+    if mode == 'subscribe' and token == VERIFY_TOKEN:
+        print("Webhook verified successfully.")
+        return challenge, 200
+
+    print("Webhook verification failed — token mismatch.")
+    return 'Forbidden', 403
+
+
+# ── Route 2: Incoming messages ────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    incoming_msg = request.values.get('Body', '').strip()
-    sender = request.values.get('From', '')
+    """
+    Meta sends all events (messages, delivery receipts, read receipts) here as JSON.
+    We only act on inbound text messages; everything else gets a silent 200.
+    """
+    data = request.get_json(silent=True) or {}
 
-    resp = MessagingResponse()
-    msg = resp.message()
-    session = get_session(sender)
+    # ── Extract message safely ────────────────────────────────────────────────
+    try:
+        value = data['entry'][0]['changes'][0]['value']
+
+        # Delivery / read status updates don't contain 'messages' — ignore them
+        if 'messages' not in value:
+            return jsonify({"status": "ok"}), 200
+
+        message = value['messages'][0]
+
+        # Ignore non-text messages (images, audio, stickers, etc.)
+        if message.get('type') != 'text':
+            return jsonify({"status": "ok"}), 200
+
+        incoming_msg = message['text']['body'].strip()
+        sender       = message['from']   # e.g. "919876543210"
+
+    except (KeyError, IndexError, TypeError):
+        # Malformed payload — acknowledge and discard
+        return jsonify({"status": "ok"}), 200
+
+    # ── Session routing ───────────────────────────────────────────────────────
+    session      = get_session(sender)
     current_step = session.get('step', 0)
-    language = session.get('language', 'english')
+    language     = session.get('language', 'english')
 
+    # Greeting keywords → restart conversation
     if incoming_msg.lower() in ['hi', 'hello', 'start', 'reset', 'vanakkam', 'namaste']:
         reset_session(sender)
         session = get_session(sender)
-        questions = QUESTIONS[language]
-        msg.body(questions[0])
+        send_message(sender, QUESTIONS['english'][0])
         update_session(sender, {'step': 1})
-        return str(resp)
+        return jsonify({"status": "ok"}), 200
 
+    # Step 99 → user is browsing scheme details
     if current_step == 99 and incoming_msg.isdigit():
         schemes = session.get('eligible_schemes', [])
         idx = int(incoming_msg) - 1
         if 0 <= idx < len(schemes):
             scheme = schemes[idx]
-            detail_msg = f"Scheme: {scheme['name']}\n"
-            detail_msg += f"Benefit: {scheme['benefit']}\n"
-            detail_msg += f"Documents: {', '.join(scheme['documents'])}\n"
-            detail_msg += f"Apply: {scheme['apply_link']}"
-            msg.body(detail_msg)
+            detail_msg = (
+                f"*{scheme['name']}*\n\n"
+                f"Benefit: {scheme['benefit']}\n"
+                f"Documents needed: {', '.join(scheme['documents'])}\n"
+                f"Apply here: {scheme['apply_link']}"
+            )
+            send_message(sender, detail_msg)
         else:
-            msg.body("Invalid number!")
-        return str(resp)
+            send_message(sender, "Invalid number! Please reply with a number from the list.")
+        return jsonify({"status": "ok"}), 200
 
+    # Step 0 → new / unrecognised user
     if current_step == 0:
-        msg.body(QUESTIONS['english'][0])
+        send_message(sender, QUESTIONS['english'][0])
         update_session(sender, {'step': 1})
+
+    # Steps 1–11 → questionnaire
     elif 1 <= current_step <= 11:
         valid = process_answer(session, current_step, incoming_msg)
         if not valid:
-            msg.body(QUESTIONS[language][current_step - 1] + "\n(Invalid input, try again)")
+            retry_prompt = QUESTIONS[language][current_step - 1] + "\n\n(Invalid input — please try again)"
+            send_message(sender, retry_prompt)
         else:
             next_step = current_step + 1
             if next_step > 11:
-                profile = session.get('profile', {})
+                # All questions answered → run eligibility check
+                profile         = session.get('profile', {})
                 eligible_schemes = check_eligibility(profile)
-                update_session(sender, {
-                    'step': 99,
-                    'eligible_schemes': eligible_schemes
-                })
-                result_message = format_schemes_message(eligible_schemes, language)
-                msg.body(result_message)
+                update_session(sender, {'step': 99, 'eligible_schemes': eligible_schemes})
+                send_message(sender, format_schemes_message(eligible_schemes, language))
             else:
-                msg.body(QUESTIONS[language][next_step - 1])
+                send_message(sender, QUESTIONS[language][next_step - 1])
                 update_session(sender, {'step': next_step})
 
-    return str(resp)
+    return jsonify({"status": "ok"}), 200
 
 
+# ── Health check ──────────────────────────────────────────────────────────────
 @app.route('/', methods=['GET'])
 def home():
-    return "Bot is running!"
+    return "Benefit Bridge AI is running!", 200
 
-
-import os
 
 if __name__ == "__main__":
-    print("Starting Benefit Bridge AI...")
+    print("Starting Benefit Bridge AI (Meta WhatsApp Cloud API)...")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
