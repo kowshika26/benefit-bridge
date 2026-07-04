@@ -1,0 +1,74 @@
+{
+  "schemes": [
+    {
+      "id": 1,
+      "name": "PM Awas Yojana (PMAY)",
+      "name_tamil": "பிரதம மந்திரி ஆவாஸ் யோஜனா",
+      "name_hindi": "प्रधानमंत्री आवास योजना",
+      "description": "Free/subsidized housing for poor families",
+      "benefit": "1,20,000 - 2,67,000 subsidy",
+      "eligibility": {
+        "max_income": 300000,
+        "has_own_house": false,
+        "category": ["general", "obc", "sc", "st"]
+      },
+      "documents": ["Aadhaar Card", "Income Certificate", "Bank Account"],
+      "apply_link": "https://pmaymis.gov.in/"
+    },
+    {
+      "id": 2,
+      "name": "PM Jan Dhan Yojana",
+      "name_tamil": "ஜன் தன் யோஜனா",
+      "name_hindi": "जन धन योजना",
+      "description": "Free bank account with insurance",
+      "benefit": "Free account + 2 lakh accident insurance",
+      "eligibility": {
+        "min_age": 10,
+        "has_bank_account": false
+      },
+      "documents": ["Aadhaar Card", "Address Proof"],
+      "apply_link": "https://pmjdy.gov.in/"
+    },
+    {
+      "id": 3,
+      "name": "Ayushman Bharat (PMJAY)",
+      "name_tamil": "ஆயுஷ்மான் பாரத்",
+      "name_hindi": "आयुष्मान भारत",
+      "description": "Free health insurance up to 5 lakh",
+      "benefit": "5,00,000 health cover per year",
+      "eligibility": {
+        "max_income": 500000,
+        "category": ["bpl", "sc", "st"]
+      },
+      "documents": ["Aadhaar Card", "Ration Card", "Income Certificate"],
+      "apply_link": "https://pmjay.gov.in/"
+    },
+    {
+      "id": 4,
+      "name": "PM Kisan Samman Nidhi",
+      "name_tamil": "பிரதம மந்திரி கிசான்",
+      "name_hindi": "पीएम किसान",
+      "description": "Direct income support for farmers",
+      "benefit": "6,000 per year",
+      "eligibility": {
+        "is_farmer": true
+      },
+      "documents": ["Aadhaar Card", "Land Records", "Bank Account"],
+      "apply_link": "https://pmkisan.gov.in/"
+    },
+    {
+      "id": 5,
+      "name": "Sukanya Samriddhi Yojana",
+      "name_tamil": "சுகன்யா சம்ருத்தி யோஜனா",
+      "name_hindi": "सुकन्या समृद्धि योजना",
+      "description": "Savings scheme for girl child education",
+      "benefit": "8.2% interest rate + tax benefits",
+      "eligibility": {
+        "has_girl_child": true,
+        "girl_child_max_age": 10
+      },
+      "documents": ["Birth Certificate", "Parent Aadhaar", "Address Proof"],
+      "apply_link": "https://www.india.gov.in/sukanya-samriddhi-yojna"
+    }
+  ]
+}
