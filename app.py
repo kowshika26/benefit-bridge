@@ -7,7 +7,7 @@ from sessions import get_session, update_session, reset_session
 app = Flask(__name__)
 
 # CONFIGURE GEMINI AI HERE
-iimport os
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
